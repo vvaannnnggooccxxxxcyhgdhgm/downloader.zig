@@ -38,6 +38,12 @@ features:
   - icon: ⚡
     title: High Performance
     details: Optimized for speed with configurable buffer sizes and minimal allocations.
+  - icon: 🔗
+    title: Checksum Verification
+    details: Built-in verification using MD5, SHA-1, SHA-256, SHA-512, or CRC32 algorithms.
+  - icon: 🚀
+    title: Update Checker
+    details: Automatically notifies you when a newer version of the library is available.
   - icon: 📦
     title: Zero Dependencies
     details: Built using only the Zig standard library - no external dependencies required.

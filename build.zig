@@ -63,6 +63,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "advanced", .src = "examples/advanced.zig" },
         .{ .name = "concurrent", .src = "examples/concurrent.zig" },
         .{ .name = "resume", .src = "examples/resume.zig" },
+        .{ .name = "checksum", .src = "examples/checksum.zig" },
+        .{ .name = "update_check", .src = "examples/update_check.zig" },
     };
 
     // Run-all-examples step

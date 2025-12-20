@@ -11,6 +11,8 @@ A lightweight, zero-dependency library that provides:
 - **Automatic Retries** - Configurable retry logic with exponential backoff
 - **Progress Tracking** - Real-time callbacks with speed and ETA
 - **Smart File Handling** - Multiple strategies for existing files
+- **Update Checker** - Automatically check for library updates
+- **Checksum Verification** - Verify file integrity (MD5, SHA-1, SHA-256, SHA-512, CRC32)
 
 ## Key Features
 

@@ -6,14 +6,8 @@ const std = @import("std");
 
 /// Current library version.
 pub const version = "0.0.1";
-
-/// Major version number.
 pub const major: u32 = 0;
-
-/// Minor version number.
 pub const minor: u32 = 0;
-
-/// Patch version number.
 pub const patch: u32 = 1;
 
 /// Pre-release identifier (empty for stable releases).
@@ -36,6 +30,21 @@ pub fn semanticVersion() std.SemanticVersion {
 /// Get the full version string.
 pub fn fullVersion() []const u8 {
     return version;
+}
+
+/// Get the version string (alias).
+pub fn getVersion() []const u8 {
+    return version;
+}
+
+/// Get version info struct.
+pub fn getVersionInfo() struct { major: u32, minor: u32, patch: u32, string: []const u8 } {
+    return .{
+        .major = major,
+        .minor = minor,
+        .patch = patch,
+        .string = version,
+    };
 }
 
 /// Compare two semantic version strings.

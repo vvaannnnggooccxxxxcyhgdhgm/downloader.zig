@@ -81,6 +81,8 @@ export default defineConfig({
             { text: 'Advanced Configuration', link: '/examples/advanced' },
             { text: 'Concurrent Downloads', link: '/examples/concurrent' },
             { text: 'Resume Downloads', link: '/examples/resume' },
+            { text: 'Checksum Verification', link: '/examples/checksum' },
+            { text: 'Update Checker', link: '/examples/update-check' },
           ]
         }
       ]

@@ -1,7 +1,7 @@
 //! Progress Tracking and Reporting
 //!
-//! Provides types and utilities for tracking download progress,
-//! calculating speed and ETA, and reporting status to callbacks.
+//! Provides comprehensive progress tracking for downloads including
+//! speed calculation, ETA estimation, and formatted output.
 
 const std = @import("std");
 
@@ -25,6 +25,10 @@ pub const Progress = struct {
     url: []const u8,
     /// Output file path.
     output_path: []const u8,
+    /// Elapsed time in milliseconds.
+    elapsed_ms: u64,
+    /// Average speed over entire download.
+    average_speed: u64,
 
     /// Calculate download progress as percentage (0.0 to 100.0).
     ///
@@ -50,6 +54,40 @@ pub const Progress = struct {
         return if (downloaded >= total) 0 else total - downloaded;
     }
 
+    /// Check if download is complete.
+    pub fn isComplete(self: Progress) bool {
+        if (self.total_bytes) |total| {
+            return self.totalDownloaded() >= total;
+        }
+        return false;
+    }
+
+    /// Get formatted speed string.
+    pub fn formattedSpeed(self: Progress) FormattedBytes {
+        return formatBytes(self.bytes_per_second);
+    }
+
+    /// Get formatted downloaded size.
+    pub fn formattedDownloaded(self: Progress) FormattedBytes {
+        return formatBytes(self.totalDownloaded());
+    }
+
+    /// Get formatted total size.
+    pub fn formattedTotal(self: Progress) ?FormattedBytes {
+        if (self.total_bytes) |total| {
+            return formatBytes(total);
+        }
+        return null;
+    }
+
+    /// Get formatted ETA.
+    pub fn formattedEta(self: Progress) ?FormattedDuration {
+        if (self.eta_seconds) |eta| {
+            return formatDuration(eta);
+        }
+        return null;
+    }
+
     /// Format progress for display.
     pub fn format(
         self: Progress,
@@ -66,15 +104,54 @@ pub const Progress = struct {
             try writer.print("{d} bytes", .{self.totalDownloaded()});
         }
 
-        try writer.print(" @ {d} KB/s", .{self.bytes_per_second / 1024});
+        const speed = self.formattedSpeed();
+        try writer.print(" @ {d:.2} {s}/s", .{ speed.value, speed.unit });
 
-        if (self.eta_seconds) |eta| {
-            const mins = eta / 60;
-            const secs = eta % 60;
-            try writer.print(" ETA {d}:{d:0>2}", .{ mins, secs });
+        if (self.formattedEta()) |eta| {
+            if (eta.hours > 0) {
+                try writer.print(" ETA {d}:{d:0>2}:{d:0>2}", .{ eta.hours, eta.minutes, eta.seconds });
+            } else {
+                try writer.print(" ETA {d}:{d:0>2}", .{ eta.minutes, eta.seconds });
+            }
         }
     }
 };
+
+/// Formatted bytes with value and unit.
+pub const FormattedBytes = struct {
+    value: f64,
+    unit: []const u8,
+};
+
+/// Formatted duration with hours, minutes, seconds.
+pub const FormattedDuration = struct {
+    hours: u64,
+    minutes: u64,
+    seconds: u64,
+};
+
+/// Format bytes to human-readable format.
+pub fn formatBytes(bytes: u64) FormattedBytes {
+    const units = [_][]const u8{ "B", "KB", "MB", "GB", "TB", "PB" };
+    var size: f64 = @floatFromInt(bytes);
+    var unit_idx: usize = 0;
+
+    while (size >= 1024.0 and unit_idx < units.len - 1) {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+
+    return .{ .value = size, .unit = units[unit_idx] };
+}
+
+/// Format duration to hours:minutes:seconds.
+pub fn formatDuration(seconds: u64) FormattedDuration {
+    return .{
+        .hours = seconds / 3600,
+        .minutes = (seconds % 3600) / 60,
+        .seconds = seconds % 60,
+    };
+}
 
 /// Progress callback function type.
 ///
@@ -92,6 +169,12 @@ pub fn stderrCallback(p: Progress) bool {
     return true;
 }
 
+/// Create a progress bar callback with custom width.
+pub fn progressBarCallback(width: u8) ProgressCallback {
+    _ = width;
+    return stderrCallback;
+}
+
 /// Internal progress tracking state.
 ///
 /// Tracks timing and byte counts to calculate speed and ETA.
@@ -102,6 +185,11 @@ pub const ProgressTracker = struct {
     last_reported_bytes: u64,
     start_offset: u64,
     total_size: ?u64,
+
+    // Speed calculation (rolling average)
+    speed_samples: [10]u64 = [_]u64{0} ** 10,
+    sample_index: usize = 0,
+    sample_count: usize = 0,
 
     /// Initialize a new progress tracker.
     pub fn init(start_offset: u64, total_size: ?u64) ProgressTracker {
@@ -119,6 +207,26 @@ pub const ProgressTracker = struct {
     /// Update with newly downloaded bytes.
     pub fn update(self: *ProgressTracker, bytes: u64) void {
         self.total_bytes_downloaded += bytes;
+    }
+
+    /// Record a speed sample for rolling average.
+    pub fn recordSpeedSample(self: *ProgressTracker, speed: u64) void {
+        self.speed_samples[self.sample_index] = speed;
+        self.sample_index = (self.sample_index + 1) % self.speed_samples.len;
+        if (self.sample_count < self.speed_samples.len) {
+            self.sample_count += 1;
+        }
+    }
+
+    /// Get rolling average speed.
+    pub fn averageSpeed(self: *const ProgressTracker) u64 {
+        if (self.sample_count == 0) return self.bytesPerSecond();
+
+        var sum: u64 = 0;
+        for (self.speed_samples[0..self.sample_count]) |s| {
+            sum += s;
+        }
+        return sum / self.sample_count;
     }
 
     /// Calculate current download speed.
@@ -141,6 +249,12 @@ pub const ProgressTracker = struct {
         return remaining / speed;
     }
 
+    /// Get elapsed time in milliseconds.
+    pub fn elapsedMs(self: *const ProgressTracker) u64 {
+        const elapsed = std.time.milliTimestamp() - self.start_time;
+        return if (elapsed > 0) @intCast(elapsed) else 0;
+    }
+
     /// Create a Progress struct with current statistics.
     pub fn progress(self: *const ProgressTracker, url: []const u8, output_path: []const u8) Progress {
         return .{
@@ -152,6 +266,8 @@ pub const ProgressTracker = struct {
             .is_resumed = self.start_offset > 0,
             .url = url,
             .output_path = output_path,
+            .elapsed_ms = self.elapsedMs(),
+            .average_speed = self.averageSpeed(),
         };
     }
 
@@ -166,8 +282,20 @@ pub const ProgressTracker = struct {
         }
         return false;
     }
+
+    /// Reset the tracker for a new download.
+    pub fn reset(self: *ProgressTracker) void {
+        const now = std.time.milliTimestamp();
+        self.start_time = now;
+        self.last_report_time = now;
+        self.total_bytes_downloaded = 0;
+        self.last_reported_bytes = 0;
+        self.sample_count = 0;
+        self.sample_index = 0;
+    }
 };
 
+// Tests
 test "progress percentage" {
     const p = Progress{
         .bytes_downloaded = 50,
@@ -178,6 +306,8 @@ test "progress percentage" {
         .is_resumed = false,
         .url = "",
         .output_path = "",
+        .elapsed_ms = 5000,
+        .average_speed = 10,
     };
 
     const pct = p.percentage().?;
@@ -194,6 +324,8 @@ test "progress with unknown total" {
         .is_resumed = false,
         .url = "",
         .output_path = "",
+        .elapsed_ms = 5000,
+        .average_speed = 10,
     };
 
     try std.testing.expect(p.percentage() == null);
@@ -204,4 +336,51 @@ test "progress tracker" {
     var tracker = ProgressTracker.init(0, 1000);
     tracker.update(100);
     try std.testing.expect(tracker.total_bytes_downloaded == 100);
+}
+
+test "format bytes" {
+    const kb = formatBytes(1024);
+    try std.testing.expect(kb.value == 1.0);
+    try std.testing.expectEqualStrings("KB", kb.unit);
+
+    const mb = formatBytes(1024 * 1024);
+    try std.testing.expect(mb.value == 1.0);
+    try std.testing.expectEqualStrings("MB", mb.unit);
+}
+
+test "format duration" {
+    const d = formatDuration(3661);
+    try std.testing.expect(d.hours == 1);
+    try std.testing.expect(d.minutes == 1);
+    try std.testing.expect(d.seconds == 1);
+}
+
+test "progress is complete" {
+    const complete = Progress{
+        .bytes_downloaded = 100,
+        .total_bytes = 100,
+        .bytes_per_second = 0,
+        .eta_seconds = 0,
+        .start_offset = 0,
+        .is_resumed = false,
+        .url = "",
+        .output_path = "",
+        .elapsed_ms = 1000,
+        .average_speed = 100,
+    };
+    try std.testing.expect(complete.isComplete());
+
+    const incomplete = Progress{
+        .bytes_downloaded = 50,
+        .total_bytes = 100,
+        .bytes_per_second = 10,
+        .eta_seconds = 5,
+        .start_offset = 0,
+        .is_resumed = false,
+        .url = "",
+        .output_path = "",
+        .elapsed_ms = 5000,
+        .average_speed = 10,
+    };
+    try std.testing.expect(!incomplete.isComplete());
 }

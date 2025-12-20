@@ -37,3 +37,8 @@ desktop.ini
 # Environment
 .env
 .env.local
+*.json
+*.pdf
+*.mp4
+*.txt
+*.log

@@ -19,6 +19,19 @@ var client = try downloader.Client.init(allocator, config);
 
 ## Configuration Options
 
+### Update Checking
+
+| Option                | Type   | Default | Description                                  |
+| --------------------- | ------ | ------- | -------------------------------------------- |
+| `enable_update_check` | `bool` | true    | Automatically check for library updates once |
+
+By default, the library checks for updates from the GitHub repository at the start of the first download in a process. You can disable this by setting `enable_update_check` to `false`.
+
+```zig
+var config = downloader.Config.default();
+config.enable_update_check = false; // Disable auto-check
+```
+
 ### Retry Settings
 
 | Option                | Type   | Default | Description                                   |
@@ -41,85 +54,22 @@ config.exponential_backoff = true;
 | Option               | Type  | Default | Description                 |
 | -------------------- | ----- | ------- | --------------------------- |
 | `connect_timeout_ms` | `u64` | 30000   | Connection timeout (ms)     |
-| `read_timeout_ms`    | `u64` | 60000   | Read timeout (ms)           |
-| `max_redirects`      | `u16` | 10      | Maximum redirects to follow |
-
-```zig
-var config = downloader.Config.default();
-config.connect_timeout_ms = 10000;  // 10 seconds
-config.read_timeout_ms = 120000;    // 2 minutes
-config.max_redirects = 5;
-```
+| `read_timeout_ms`    | `u64` | 0       | Read timeout (ms, 0=none)   |
+| `max_redirects`      | `u32` | 10      | Maximum redirects to follow |
 
 ### File Handling
 
 | Option               | Type               | Default               | Description                         |
 | -------------------- | ------------------ | --------------------- | ----------------------------------- |
-| `resume_downloads`   | `bool`             | true                  | Attempt to resume partial downloads |
+| `resume_downloads`   | `bool`             | false                 | Attempt to resume partial downloads |
 | `file_exists_action` | `FileExistsAction` | `.rename_with_number` | How to handle existing files        |
-
-#### FileExistsAction Options
-
-| Action                | Description                                              |
-| --------------------- | -------------------------------------------------------- |
-| `rename_with_number`  | Create file (1), file (2), etc. like Windows/Linux/macOS |
-| `overwrite`           | Replace existing file                                    |
-| `resume_or_overwrite` | Try resume, if not possible overwrite                    |
-| `skip`                | Don't download if file already exists                    |
-| `fail`                | Return an error if file exists                           |
-
-```zig
-var config = downloader.Config.default();
-config.file_exists_action = .rename_with_number;  // Default - safe
-
-// Examples of other options:
-config.file_exists_action = .overwrite;           // Replace file
-config.file_exists_action = .resume_or_overwrite; // Resume if possible
-config.file_exists_action = .skip;                // Skip if exists
-config.file_exists_action = .fail;                // Error if exists
-```
+| `filename_strategy`  | `FilenameStrategy` | `.use_provided`       | How to resolve the output filename  |
 
 ### Buffer & Performance
 
 | Option        | Type    | Default | Description                   |
 | ------------- | ------- | ------- | ----------------------------- |
 | `buffer_size` | `usize` | 65536   | Download buffer size in bytes |
-
-```zig
-// For large files, use bigger buffers
-var config = downloader.Config.forLargeFiles();
-// Sets buffer_size to 256 KB
-
-// Or set manually
-var config = downloader.Config.default();
-config.buffer_size = 512 * 1024;  // 512 KB
-```
-
-### Identity & Security
-
-| Option       | Type          | Default | Description              |
-| ------------ | ------------- | ------- | ------------------------ |
-| `user_agent` | `?[]const u8` | null    | Custom User-Agent header |
-| `verify_tls` | `bool`        | true    | Verify TLS certificates  |
-
-```zig
-var config = downloader.Config.default();
-config.user_agent = "MyApp/1.0 (+https://myapp.com)";
-config.verify_tls = true;  // Always true in production!
-```
-
-### Progress Reporting
-
-| Option                    | Type    | Default | Description                            |
-| ------------------------- | ------- | ------- | -------------------------------------- |
-| `progress_interval_bytes` | `usize` | 0       | Report every N bytes (0 = every chunk) |
-| `progress_interval_ms`    | `u64`   | 100     | Minimum ms between reports             |
-
-```zig
-var config = downloader.Config.default();
-config.progress_interval_ms = 250;  // Report 4x per second max
-config.progress_interval_bytes = 1024 * 1024;  // Report every 1 MB
-```
 
 ## Preset Configurations
 
@@ -139,10 +89,11 @@ const config = downloader.Config.forLargeFiles();
 
 Optimized for large file downloads:
 
-- 256 KB buffer
+- 1 MB buffer
+- Resume enabled
+- Use temporary file
 - 5 retries
-- 2 minute read timeout
-- Progress every 1 MB
+- Exponential backoff
 
 ### Small Files
 
@@ -154,43 +105,7 @@ Optimized for small, quick downloads:
 
 - 16 KB buffer
 - 2 retries
-- 500ms retry delay
-
-### No Resume
-
-```zig
-const config = downloader.Config.noResume();
-```
-
-Disables resume functionality:
-
-- `resume_downloads = false`
-- `file_exists_action = .overwrite`
-
-### No Retries
-
-```zig
-const config = downloader.Config.noRetries();
-```
-
-Disables all retry logic:
-
-- `max_retries = 0`
-
-## Configuration Validation
-
-The `Config` struct includes validation:
-
-```zig
-var config = downloader.Config.default();
-config.buffer_size = 0;  // Invalid!
-
-try config.validate();  // Returns error.InvalidBufferSize
-```
-
-Validation rules:
-
-- `buffer_size` must be > 0 and ≤ 16 MB
+- Resume disabled
 
 ## Complete Example
 
@@ -206,14 +121,12 @@ pub fn main() !void {
     // Create custom configuration
     var config = downloader.Config.default();
 
+    // Disable auto update check
+    config.enable_update_check = false;
+
     // Retry settings
     config.max_retries = 5;
-    config.retry_delay_ms = 500;
     config.exponential_backoff = true;
-
-    // Connection settings
-    config.connect_timeout_ms = 15000;
-    config.read_timeout_ms = 120000;
 
     // File handling
     config.resume_downloads = true;
@@ -221,12 +134,6 @@ pub fn main() !void {
 
     // Performance
     config.buffer_size = 128 * 1024;
-
-    // Identity
-    config.user_agent = "MyDownloader/1.0";
-
-    // Validate configuration
-    try config.validate();
 
     // Create client
     var client = try downloader.Client.init(allocator, config);
@@ -240,9 +147,3 @@ pub fn main() !void {
     );
 }
 ```
-
-## Next Steps
-
-- [Progress Reporting](/guide/progress) - Track download progress
-- [Resume Downloads](/guide/resume) - Resume interrupted downloads
-- [Error Handling](/guide/errors) - Handle download errors

@@ -1,141 +1,287 @@
-//! Download Resume Support
+//! Resume Download Support
 //!
 //! Provides functionality for resuming interrupted downloads using
-//! HTTP Range headers. Includes file verification and offset calculation.
+//! HTTP Range requests. Tracks partial download state and validates
+//! server support for range requests.
 
 const std = @import("std");
-const errors = @import("errors.zig");
+const Allocator = std.mem.Allocator;
 
-/// Resume capability check result.
+/// Information about a partial download for resumption.
 pub const ResumeInfo = struct {
-    /// Whether resume is possible.
-    can_resume: bool,
-    /// Byte offset to resume from.
-    offset: u64,
-    /// Reason if resume is not possible.
-    reason: ?ResumeBlockReason,
-};
+    /// Existing file size (bytes already downloaded).
+    existing_size: u64,
+    /// Expected total file size (from previous attempt).
+    expected_total: ?u64,
+    /// ETag from previous download (for validation).
+    etag: ?[]const u8,
+    /// Last-Modified from previous download (for validation).
+    last_modified: ?[]const u8,
+    /// Path to the partial file.
+    file_path: []const u8,
 
-/// Reasons why resume may not be possible.
-pub const ResumeBlockReason = enum {
-    /// No partial file exists.
-    no_partial_file,
-    /// Server does not support Range requests.
-    server_not_supported,
-    /// Partial file is empty.
-    file_empty,
-    /// Partial file is already complete.
-    file_complete,
-    /// File was modified on server.
-    file_modified,
-};
-
-/// Check if a download can be resumed.
-///
-/// Examines the partial file and server capabilities to determine
-/// if resume is possible and at what offset.
-pub fn checkResumeCapability(
-    output_path: []const u8,
-    server_content_length: ?u64,
-    server_accepts_ranges: bool,
-) ResumeInfo {
-    // Check if server supports Range requests
-    if (!server_accepts_ranges) {
-        return .{
-            .can_resume = false,
-            .offset = 0,
-            .reason = .server_not_supported,
-        };
+    /// Check if resume is possible (file has content).
+    pub fn canResume(self: ResumeInfo) bool {
+        return self.existing_size > 0;
     }
 
-    // Check if partial file exists
-    const file = std.fs.cwd().openFile(output_path, .{}) catch {
+    /// Get the Range header value for resuming.
+    pub fn rangeHeader(self: ResumeInfo, allocator: Allocator) !?[]u8 {
+        if (self.existing_size == 0) return null;
+        return try std.fmt.allocPrint(allocator, "bytes={d}-", .{self.existing_size});
+    }
+
+    /// Format range for display.
+    pub fn formatRange(self: ResumeInfo) RangeFormat {
         return .{
-            .can_resume = false,
-            .offset = 0,
-            .reason = .no_partial_file,
+            .start = self.existing_size,
+            .end = self.expected_total,
         };
+    }
+};
+
+/// Range format helper.
+pub const RangeFormat = struct {
+    start: u64,
+    end: ?u64,
+
+    pub fn format(
+        self: RangeFormat,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("bytes={d}-", .{self.start});
+        if (self.end) |e| {
+            try writer.print("{d}", .{e - 1});
+        }
+    }
+};
+
+/// Get resume information for a file.
+pub fn getResumeInfo(allocator: Allocator, file_path: []const u8) !?ResumeInfo {
+    _ = allocator;
+
+    const file = std.fs.cwd().openFile(file_path, .{}) catch {
+        // File doesn't exist, can't resume
+        return null;
     };
     defer file.close();
 
-    // Get current file size
     const stat = file.stat() catch {
-        return .{
-            .can_resume = false,
-            .offset = 0,
-            .reason = .no_partial_file,
-        };
+        return null;
     };
 
-    const current_size = stat.size;
-
-    // Empty file - no point resuming
-    if (current_size == 0) {
-        return .{
-            .can_resume = false,
-            .offset = 0,
-            .reason = .file_empty,
-        };
+    if (stat.size == 0) {
+        return null;
     }
 
-    // Check against server's content length
-    if (server_content_length) |total| {
-        if (current_size >= total) {
-            return .{
-                .can_resume = false,
-                .offset = 0,
-                .reason = .file_complete,
-            };
+    return ResumeInfo{
+        .existing_size = stat.size,
+        .expected_total = null,
+        .etag = null,
+        .last_modified = null,
+        .file_path = file_path,
+    };
+}
+
+/// Check if server supports range requests.
+pub fn supportsRangeRequests(accept_ranges: ?[]const u8) bool {
+    if (accept_ranges) |ar| {
+        return std.mem.eql(u8, ar, "bytes");
+    }
+    return false;
+}
+
+/// Validate that a partial file matches the server's current version.
+pub fn validateResume(
+    existing_etag: ?[]const u8,
+    server_etag: ?[]const u8,
+    existing_last_modified: ?[]const u8,
+    server_last_modified: ?[]const u8,
+) bool {
+    // If server provides ETag, it must match
+    if (server_etag) |s_etag| {
+        if (existing_etag) |e_etag| {
+            if (!std.mem.eql(u8, s_etag, e_etag)) {
+                return false;
+            }
         }
     }
 
-    // Resume is possible
-    return .{
-        .can_resume = true,
-        .offset = current_size,
-        .reason = null,
-    };
-}
-
-/// Open output file for writing, handling resume offset.
-///
-/// If offset > 0, opens for append. Otherwise creates a new file.
-pub fn openOutputFile(path: []const u8, offset: u64) !std.fs.File {
-    if (offset > 0) {
-        // Open existing file for appending
-        const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
-        try file.seekTo(offset);
-        return file;
-    } else {
-        // Create new file
-        return try std.fs.cwd().createFile(path, .{});
+    // If server provides Last-Modified, it should match
+    if (server_last_modified) |s_lm| {
+        if (existing_last_modified) |e_lm| {
+            if (!std.mem.eql(u8, s_lm, e_lm)) {
+                return false;
+            }
+        }
     }
+
+    return true;
 }
 
-/// Verify partial file integrity.
-///
-/// Returns true if the partial file appears valid for resumption.
-pub fn verifyPartialFile(path: []const u8, expected_offset: u64) bool {
-    const file = std.fs.cwd().openFile(path, .{}) catch return false;
-    defer file.close();
+/// State for managing resume across multiple download attempts.
+pub const ResumeState = struct {
+    allocator: Allocator,
+    file_path: []const u8,
+    start_offset: u64,
+    etag: ?[]const u8,
+    last_modified: ?[]const u8,
+    total_size: ?u64,
+    validated: bool,
 
-    const stat = file.stat() catch return false;
-    return stat.size == expected_offset;
+    /// Initialize resume state from existing file.
+    pub fn init(allocator: Allocator, file_path: []const u8) !ResumeState {
+        var state = ResumeState{
+            .allocator = allocator,
+            .file_path = file_path,
+            .start_offset = 0,
+            .etag = null,
+            .last_modified = null,
+            .total_size = null,
+            .validated = false,
+        };
+
+        // Check for existing partial file
+        if (try getResumeInfo(allocator, file_path)) |info| {
+            state.start_offset = info.existing_size;
+            state.etag = info.etag;
+            state.last_modified = info.last_modified;
+            state.total_size = info.expected_total;
+        }
+
+        return state;
+    }
+
+    /// Update state after receiving response headers.
+    pub fn updateFromResponse(
+        self: *ResumeState,
+        content_length: ?u64,
+        content_range: ?[]const u8,
+        etag: ?[]const u8,
+        last_modified: ?[]const u8,
+    ) void {
+        _ = content_range;
+
+        if (content_length) |cl| {
+            self.total_size = self.start_offset + cl;
+        }
+
+        if (etag) |e| {
+            self.etag = e;
+        }
+
+        if (last_modified) |lm| {
+            self.last_modified = lm;
+        }
+
+        self.validated = true;
+    }
+
+    /// Check if we should resume.
+    pub fn shouldResume(self: *const ResumeState) bool {
+        return self.start_offset > 0;
+    }
+
+    /// Get bytes already downloaded.
+    pub fn bytesDownloaded(self: *const ResumeState) u64 {
+        return self.start_offset;
+    }
+
+    /// Release any allocated resources.
+    pub fn deinit(self: *ResumeState) void {
+        self.* = undefined;
+    }
+};
+
+/// Resume metadata stored alongside partial downloads.
+pub const ResumeMetadata = struct {
+    url: []const u8,
+    etag: ?[]const u8,
+    last_modified: ?[]const u8,
+    total_size: ?u64,
+    downloaded_size: u64,
+    timestamp: i64,
+
+    /// Serialize metadata to JSON.
+    pub fn toJson(self: ResumeMetadata, allocator: Allocator) ![]u8 {
+        return try std.json.stringifyAlloc(allocator, self, .{});
+    }
+
+    /// Load metadata from JSON.
+    pub fn fromJson(allocator: Allocator, json: []const u8) !?ResumeMetadata {
+        const parsed = try std.json.parseFromSlice(ResumeMetadata, allocator, json, .{
+            .ignore_unknown_fields = true,
+        });
+        defer parsed.deinit();
+
+        // We need to dupe the strings because parsed.deinit() will free them
+        return ResumeMetadata{
+            .url = try allocator.dupe(u8, parsed.value.url),
+            .etag = if (parsed.value.etag) |e| try allocator.dupe(u8, e) else null,
+            .last_modified = if (parsed.value.last_modified) |lm| try allocator.dupe(u8, lm) else null,
+            .total_size = parsed.value.total_size,
+            .downloaded_size = parsed.value.downloaded_size,
+            .timestamp = parsed.value.timestamp,
+        };
+    }
+
+    /// Free memory allocated by fromJson.
+    pub fn deinit(self: *ResumeMetadata, allocator: Allocator) void {
+        allocator.free(self.url);
+        if (self.etag) |e| allocator.free(e);
+        if (self.last_modified) |lm| allocator.free(lm);
+    }
+};
+
+// Tests
+test "resume info" {
+    const info = ResumeInfo{
+        .existing_size = 1000,
+        .expected_total = 5000,
+        .etag = null,
+        .last_modified = null,
+        .file_path = "test.bin",
+    };
+
+    try std.testing.expect(info.canResume());
 }
 
-/// Delete a partial file if it exists.
-pub fn deletePartialFile(path: []const u8) void {
-    std.fs.cwd().deleteFile(path) catch {};
+test "resume info cannot resume empty" {
+    const info = ResumeInfo{
+        .existing_size = 0,
+        .expected_total = 5000,
+        .etag = null,
+        .last_modified = null,
+        .file_path = "test.bin",
+    };
+
+    try std.testing.expect(!info.canResume());
 }
 
-test "resume capability - no file" {
-    const info = checkResumeCapability("nonexistent_file.pdf", 1000, true);
-    try std.testing.expect(!info.can_resume);
-    try std.testing.expect(info.reason == .no_partial_file);
+test "supports range requests" {
+    try std.testing.expect(supportsRangeRequests("bytes"));
+    try std.testing.expect(!supportsRangeRequests("none"));
+    try std.testing.expect(!supportsRangeRequests(null));
 }
 
-test "resume capability - server not supported" {
-    const info = checkResumeCapability("any_file.pdf", 1000, false);
-    try std.testing.expect(!info.can_resume);
-    try std.testing.expect(info.reason == .server_not_supported);
+test "validate resume matching etag" {
+    try std.testing.expect(validateResume(
+        "abc123",
+        "abc123",
+        null,
+        null,
+    ));
+}
+
+test "validate resume mismatched etag" {
+    try std.testing.expect(!validateResume(
+        "abc123",
+        "xyz789",
+        null,
+        null,
+    ));
 }

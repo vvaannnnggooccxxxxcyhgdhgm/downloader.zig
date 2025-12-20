@@ -1,211 +1,343 @@
-//! Internal Utilities
+//! Utility Functions
 //!
-//! Helper functions for URL parsing, file operations, timing,
-//! and other common operations used throughout the library.
+//! Provides helper functions for URL parsing, filename extraction,
+//! Content-Disposition parsing, and file path manipulation.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
-/// Parse a URL string into a URI.
+/// Generate a unique filename by appending a number suffix.
 ///
-/// Returns null if the URL is malformed.
-pub fn parseUrl(url: []const u8) ?std.Uri {
-    return std.Uri.parse(url) catch return null;
-}
-
-/// Check if a URL scheme is supported.
-///
-/// Only http and https are supported.
-pub fn isSupportedScheme(scheme: []const u8) bool {
-    return std.mem.eql(u8, scheme, "http") or std.mem.eql(u8, scheme, "https");
-}
-
-/// Check if an HTTP status code indicates success (2xx).
-pub fn isSuccessStatus(status: u16) bool {
-    return status >= 200 and status < 300;
-}
-
-/// Check if an HTTP status code indicates partial content (206).
-pub fn isPartialContent(status: u16) bool {
-    return status == 206;
-}
-
-/// Check if an HTTP status code indicates a redirect (3xx).
-pub fn isRedirect(status: u16) bool {
-    return status >= 300 and status < 400;
-}
-
-/// Check if an error is transient and worth retrying.
-pub fn isRetryableError(err: anyerror) bool {
-    return switch (err) {
-        error.ConnectionTimeout,
-        error.ConnectionFailed,
-        error.DownloadInterrupted,
-        error.ConnectionResetByPeer,
-        error.BrokenPipe,
-        error.NetworkUnreachable,
-        error.HostUnreachable,
-        error.ConnectionRefused,
-        => true,
-        else => false,
+/// Similar to Windows behavior: file (1).pdf, file (2).pdf, etc.
+pub fn getUniqueFilename(
+    allocator: Allocator,
+    base_path: []const u8,
+    max_attempts: u32,
+) ![]u8 {
+    // First check if base path exists
+    std.fs.cwd().access(base_path, .{}) catch {
+        // File doesn't exist, use base path
+        return allocator.dupe(u8, base_path);
     };
-}
 
-/// Sleep for the specified number of milliseconds.
-pub fn sleepMs(ms: u64) void {
-    std.Thread.sleep(ms * std.time.ns_per_ms);
-}
+    // Find extension
+    var ext_start: usize = base_path.len;
+    var name_end: usize = base_path.len;
+    for (base_path, 0..) |c, i| {
+        if (c == '.') {
+            ext_start = i;
+            name_end = i;
+        } else if (c == '/' or c == '\\') {
+            ext_start = base_path.len;
+            name_end = base_path.len;
+        }
+    }
 
-/// Get the file size, or null if the file doesn't exist.
-pub fn getFileSize(path: []const u8) ?u64 {
-    const file = std.fs.cwd().openFile(path, .{}) catch return null;
-    defer file.close();
-    const stat = file.stat() catch return null;
-    return stat.size;
+    const name = base_path[0..name_end];
+    const ext = base_path[ext_start..];
+
+    // Try numbered suffixes
+    var i: u32 = 1;
+    while (i <= max_attempts) : (i += 1) {
+        const new_path = try std.fmt.allocPrint(allocator, "{s} ({d}){s}", .{ name, i, ext });
+        errdefer allocator.free(new_path);
+
+        std.fs.cwd().access(new_path, .{}) catch {
+            // File doesn't exist, use this path
+            return new_path;
+        };
+
+        allocator.free(new_path);
+    }
+
+    return error.OutOfMemory;
 }
 
 /// Extract filename from a URL path.
-///
-/// Returns "download" if no filename can be determined.
 pub fn filenameFromUrl(url: []const u8) []const u8 {
-    const uri = parseUrl(url) orelse return "download";
-    const path = uri.path.percent_encoded;
-    if (path.len == 0) return "download";
+    // Find the path part (after scheme://host)
+    var path_start: usize = 0;
+    var slash_count: u8 = 0;
 
-    var last_slash: usize = 0;
-    for (path, 0..) |c, i| {
+    for (url, 0..) |c, i| {
+        if (c == '/') {
+            slash_count += 1;
+            if (slash_count >= 3) {
+                path_start = i + 1;
+                break;
+            }
+        }
+    }
+
+    // Find last slash in path
+    var last_slash: usize = path_start;
+    for (url[path_start..], path_start..) |c, i| {
         if (c == '/') last_slash = i + 1;
     }
 
-    const filename = path[last_slash..];
-    if (filename.len == 0) return "download";
+    const filename_with_query = url[last_slash..];
+    if (filename_with_query.len == 0) return "download";
+
+    // Remove query string
+    for (filename_with_query, 0..) |c, i| {
+        if (c == '?' or c == '#') {
+            if (i == 0) return "download";
+            return filename_with_query[0..i];
+        }
+    }
+
+    return filename_with_query;
+}
+
+/// Parse Content-Disposition header to extract filename.
+///
+/// Supports both:
+/// - Content-Disposition: attachment; filename="example.pdf"
+/// - Content-Disposition: attachment; filename=example.pdf
+/// - Content-Disposition: attachment; filename*=UTF-8''example.pdf
+pub fn parseContentDisposition(header: []const u8) ?[]const u8 {
+    // Look for filename= or filename*=
+    const filename_key = "filename=";
+    const filename_star_key = "filename*=";
+
+    // Try filename* first (RFC 5987 extended notation)
+    if (std.mem.indexOf(u8, header, filename_star_key)) |star_pos| {
+        const value_start = star_pos + filename_star_key.len;
+        if (value_start < header.len) {
+            // Skip encoding prefix like UTF-8''
+            const value = header[value_start..];
+            if (std.mem.indexOf(u8, value, "''")) |quote_pos| {
+                const name_start = quote_pos + 2;
+                if (name_start < value.len) {
+                    return extractValue(value[name_start..]);
+                }
+            }
+        }
+    }
+
+    // Fall back to regular filename=
+    if (std.mem.indexOf(u8, header, filename_key)) |pos| {
+        const value_start = pos + filename_key.len;
+        if (value_start < header.len) {
+            return extractValue(header[value_start..]);
+        }
+    }
+
+    return null;
+}
+
+/// Extract a value, handling quoted strings.
+fn extractValue(input: []const u8) []const u8 {
+    if (input.len == 0) return input;
+
+    var start: usize = 0;
+    var end: usize = input.len;
+
+    // Handle quoted string
+    if (input[0] == '"') {
+        start = 1;
+        for (input[1..], 1..) |c, i| {
+            if (c == '"') {
+                end = i;
+                break;
+            }
+        }
+    } else {
+        // Unquoted - find end (semicolon or whitespace)
+        for (input, 0..) |c, i| {
+            if (c == ';' or c == ' ' or c == '\t' or c == '\r' or c == '\n') {
+                end = i;
+                break;
+            }
+        }
+    }
+
+    return input[start..end];
+}
+
+/// Sanitize a filename by removing/replacing invalid characters.
+pub fn sanitizeFilename(allocator: Allocator, filename: []const u8) ![]u8 {
+    const invalid_chars = "<>:\"/\\|?*";
+    var result = try allocator.alloc(u8, filename.len);
+    errdefer allocator.free(result);
+
+    var len: usize = 0;
+    for (filename) |c| {
+        // Skip invalid characters
+        var is_invalid = false;
+        for (invalid_chars) |invalid| {
+            if (c == invalid) {
+                is_invalid = true;
+                break;
+            }
+        }
+
+        // Skip control characters
+        if (c < 32) continue;
+
+        if (!is_invalid) {
+            result[len] = c;
+            len += 1;
+        }
+    }
+
+    // Trim trailing spaces and dots
+    while (len > 0 and (result[len - 1] == ' ' or result[len - 1] == '.')) {
+        len -= 1;
+    }
+
+    if (len == 0) {
+        allocator.free(result);
+        return allocator.dupe(u8, "download");
+    }
+
+    return allocator.realloc(result, len);
+}
+
+/// Get file extension from filename.
+pub fn getExtension(filename: []const u8) ?[]const u8 {
+    var last_dot: ?usize = null;
+    var last_sep: usize = 0;
 
     for (filename, 0..) |c, i| {
-        if (c == '?') return filename[0..i];
-    }
-
-    return filename;
-}
-
-/// Generate a unique filename by appending (1), (2), etc.
-///
-/// Follows the naming convention used by Windows, Linux, and macOS
-/// file managers when a file already exists.
-pub fn getUniqueFilename(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    if (std.fs.cwd().access(path, .{})) |_| {
-        // File exists
-    } else |_| {
-        return try allocator.dupe(u8, path);
-    }
-
-    // Find extension separator
-    var ext_start: usize = path.len;
-    var name_end: usize = path.len;
-    var i: usize = path.len;
-    while (i > 0) {
-        i -= 1;
-        if (path[i] == '.') {
-            ext_start = i;
-            name_end = i;
-            break;
-        }
-        if (path[i] == '/' or path[i] == '\\') {
-            break;
+        if (c == '/' or c == '\\') {
+            last_sep = i;
+            last_dot = null;
+        } else if (c == '.') {
+            last_dot = i;
         }
     }
 
-    const base_name = path[0..name_end];
-    const extension = path[ext_start..];
-
-    var counter: u32 = 1;
-    while (counter < 10000) : (counter += 1) {
-        const new_path = try std.fmt.allocPrint(allocator, "{s} ({d}){s}", .{ base_name, counter, extension });
-
-        if (std.fs.cwd().access(new_path, .{})) |_| {
-            allocator.free(new_path);
-        } else |_| {
-            return new_path;
+    if (last_dot) |dot| {
+        if (dot > last_sep and dot + 1 < filename.len) {
+            return filename[dot + 1 ..];
         }
     }
 
-    return try std.fmt.allocPrint(allocator, "{s} (9999){s}", .{ base_name, extension });
+    return null;
 }
 
-/// Truncate a file to the specified size.
-pub fn truncateFile(path: []const u8, size: u64) !void {
-    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
-    defer file.close();
-    try file.setEndPos(size);
-}
-
-/// Calculate exponential backoff delay with jitter.
-pub fn calculateBackoff(
-    base_delay_ms: u64,
-    max_delay_ms: u64,
-    attempt: u32,
-    use_exponential: bool,
-) u64 {
-    if (!use_exponential) return base_delay_ms;
-
-    const multiplier: u64 = @as(u64, 1) << @min(attempt, 20);
-    const delay = @min(base_delay_ms *| multiplier, max_delay_ms);
-
-    // Add jitter (±25%)
-    const jitter_range = delay / 4;
-    if (jitter_range == 0) return delay;
-
-    const jitter = @as(u64, @intCast(attempt)) * 17 % (jitter_range * 2);
-    return delay -| jitter_range +| jitter;
-}
-
-/// Validate that a path is safe for writing.
-pub fn validateOutputPath(path: []const u8) bool {
-    if (path.len == 0) return false;
-
-    if (std.mem.startsWith(u8, path, "http://") or
-        std.mem.startsWith(u8, path, "https://"))
-    {
-        return false;
+/// Join path components.
+pub fn joinPath(allocator: Allocator, dir: []const u8, filename: []const u8) ![]u8 {
+    if (dir.len == 0) {
+        return allocator.dupe(u8, filename);
     }
 
-    return true;
+    const sep: u8 = if (std.mem.indexOf(u8, dir, "\\") != null) '\\' else '/';
+    const has_trailing_sep = dir[dir.len - 1] == '/' or dir[dir.len - 1] == '\\';
+
+    if (has_trailing_sep) {
+        return std.fmt.allocPrint(allocator, "{s}{s}", .{ dir, filename });
+    } else {
+        return std.fmt.allocPrint(allocator, "{s}{c}{s}", .{ dir, sep, filename });
+    }
 }
 
-test "URL parsing" {
-    const uri = parseUrl("https://example.com/file.zip");
-    try std.testing.expect(uri != null);
-    try std.testing.expectEqualStrings("https", uri.?.scheme);
+/// Format bytes as human-readable string.
+pub fn formatBytes(bytes: u64) struct { value: f64, unit: []const u8 } {
+    const units = [_][]const u8{ "B", "KB", "MB", "GB", "TB", "PB" };
+    var size: f64 = @floatFromInt(bytes);
+    var unit_idx: usize = 0;
+
+    while (size >= 1024.0 and unit_idx < units.len - 1) {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+
+    return .{ .value = size, .unit = units[unit_idx] };
 }
 
-test "scheme validation" {
-    try std.testing.expect(isSupportedScheme("http"));
-    try std.testing.expect(isSupportedScheme("https"));
-    try std.testing.expect(!isSupportedScheme("ftp"));
+/// Format duration in seconds as human-readable string.
+pub fn formatDuration(seconds: u64) struct { hours: u64, minutes: u64, secs: u64 } {
+    return .{
+        .hours = seconds / 3600,
+        .minutes = (seconds % 3600) / 60,
+        .secs = seconds % 60,
+    };
 }
 
-test "status code classification" {
-    try std.testing.expect(isSuccessStatus(200));
-    try std.testing.expect(isSuccessStatus(206));
-    try std.testing.expect(!isSuccessStatus(404));
-    try std.testing.expect(!isSuccessStatus(500));
+/// Check if a URL uses HTTPS.
+pub fn isHttps(url: []const u8) bool {
+    return std.mem.startsWith(u8, url, "https://");
 }
 
-test "filename extraction" {
-    try std.testing.expectEqualStrings("file.zip", filenameFromUrl("https://example.com/path/file.zip"));
-    try std.testing.expectEqualStrings("download", filenameFromUrl("https://example.com/"));
+/// Check if a URL is valid HTTP/HTTPS.
+pub fn isValidHttpUrl(url: []const u8) bool {
+    return std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://");
 }
 
-test "exponential backoff" {
-    const delay0 = calculateBackoff(1000, 30000, 0, true);
-    const delay1 = calculateBackoff(1000, 30000, 1, true);
-    const delay2 = calculateBackoff(1000, 30000, 2, true);
+/// Get the host from a URL.
+pub fn getHost(url: []const u8) ?[]const u8 {
+    // Skip scheme
+    var start: usize = 0;
+    if (std.mem.startsWith(u8, url, "https://")) {
+        start = 8;
+    } else if (std.mem.startsWith(u8, url, "http://")) {
+        start = 7;
+    } else {
+        return null;
+    }
 
-    try std.testing.expect(delay0 <= 1250);
-    try std.testing.expect(delay1 <= delay2 or delay1 >= 1000);
+    // Find end of host (port, path, or end)
+    for (url[start..], start..) |c, i| {
+        if (c == ':' or c == '/' or c == '?' or c == '#') {
+            return url[start..i];
+        }
+    }
+
+    return url[start..];
 }
 
-test "output path validation" {
-    try std.testing.expect(validateOutputPath("file.zip"));
-    try std.testing.expect(validateOutputPath("./downloads/file.zip"));
-    try std.testing.expect(!validateOutputPath(""));
-    try std.testing.expect(!validateOutputPath("https://example.com"));
+// Tests
+test "filename from url" {
+    try std.testing.expectEqualStrings(
+        "file.pdf",
+        filenameFromUrl("https://example.com/path/file.pdf"),
+    );
+    try std.testing.expectEqualStrings(
+        "file.pdf",
+        filenameFromUrl("https://example.com/file.pdf?query=1"),
+    );
+    try std.testing.expectEqualStrings(
+        "download",
+        filenameFromUrl("https://example.com/"),
+    );
+}
+
+test "parse content disposition" {
+    try std.testing.expectEqualStrings(
+        "example.pdf",
+        parseContentDisposition("attachment; filename=\"example.pdf\"").?,
+    );
+    try std.testing.expectEqualStrings(
+        "example.pdf",
+        parseContentDisposition("attachment; filename=example.pdf").?,
+    );
+    try std.testing.expect(parseContentDisposition("inline") == null);
+}
+
+test "get extension" {
+    try std.testing.expectEqualStrings("pdf", getExtension("file.pdf").?);
+    try std.testing.expectEqualStrings("gz", getExtension("archive.tar.gz").?);
+    try std.testing.expect(getExtension("noext") == null);
+}
+
+test "format bytes" {
+    const kb = formatBytes(1024);
+    try std.testing.expect(kb.value == 1.0);
+    try std.testing.expectEqualStrings("KB", kb.unit);
+
+    const mb = formatBytes(1024 * 1024);
+    try std.testing.expect(mb.value == 1.0);
+    try std.testing.expectEqualStrings("MB", mb.unit);
+}
+
+test "is https" {
+    try std.testing.expect(isHttps("https://example.com"));
+    try std.testing.expect(!isHttps("http://example.com"));
+}
+
+test "get host" {
+    try std.testing.expectEqualStrings("example.com", getHost("https://example.com/path").?);
+    try std.testing.expectEqualStrings("example.com", getHost("http://example.com:8080/").?);
 }

@@ -6,21 +6,60 @@ Download configuration options.
 
 ```zig
 pub const Config = struct {
+    // Retry Configuration
     max_retries: u32 = 3,
     retry_delay_ms: u64 = 1000,
-    max_retry_delay_ms: u64 = 30000,
     exponential_backoff: bool = true,
+    max_retry_delay_ms: u64 = 30000,
+
+    // Connection Configuration
     connect_timeout_ms: u64 = 30000,
-    read_timeout_ms: u64 = 60000,
-    resume_downloads: bool = true,
-    file_exists_action: FileExistsAction = .rename_with_number,
-    overwrite_existing: bool = false,
+    read_timeout_ms: u64 = 0,
+    follow_redirects: bool = true,
+    max_redirects: u32 = 10,
+
+    // Buffer Configuration
     buffer_size: usize = 64 * 1024,
-    max_redirects: u16 = 10,
-    user_agent: ?[]const u8 = null,
-    verify_tls: bool = true,
-    progress_interval_bytes: usize = 0,
+
+    // Resume Configuration
+    resume_downloads: bool = false,
+
+    // Progress Configuration
     progress_interval_ms: u64 = 100,
+
+    // File Handling
+    file_exists_action: FileExistsAction = .rename_with_number,
+    filename_strategy: FilenameStrategy = .use_provided,
+    create_directories: bool = true,
+    use_temp_file: bool = false,
+    temp_suffix: []const u8 = ".download",
+
+    // Request Configuration
+    method: HttpMethod = .GET,
+    user_agent: ?[]const u8 = null,
+    custom_headers: []const HttpHeader = &.{},
+    request_body: ?[]const u8 = null,
+    content_type: ?[]const u8 = null,
+    authorization: ?[]const u8 = null,
+    accept: ?[]const u8 = null,
+    accept_encoding: ?[]const u8 = null,
+    referer: ?[]const u8 = null,
+    cookie: ?[]const u8 = null,
+
+    // Range Request Configuration
+    range_start: ?u64 = null,
+    range_end: ?u64 = null,
+
+    // Security Configuration
+    verify_tls: bool = true,
+
+    // Validation
+    expected_size: ?u64 = null,
+    expected_checksum: ?[]const u8 = null,
+    checksum_algorithm: ChecksumAlgorithm = .none,
+
+    // Update Check
+    enable_update_check: bool = true,
 };
 ```
 
@@ -28,10 +67,10 @@ pub const Config = struct {
 
 ```zig
 pub const FileExistsAction = enum {
+    rename_with_number,  // Create file (1), file (2), etc.
     overwrite,           // Replace existing file
     resume_or_overwrite, // Try resume, otherwise overwrite
     skip,                // Skip if exists
-    rename_with_number,  // Create file (1), file (2), etc.
     fail,                // Return error
 };
 ```
@@ -54,10 +93,11 @@ pub fn forLargeFiles() Config
 
 Optimized for large downloads:
 
-- 256 KB buffer
+- 1 MB buffer
+- Resume enabled
+- Use temporary file
 - 5 retries
-- 2 minute timeout
-- Progress every 1 MB
+- Exponential backoff
 
 ### `forSmallFiles`
 
@@ -69,48 +109,25 @@ Optimized for quick downloads:
 
 - 16 KB buffer
 - 2 retries
-- 500ms delay
-
-### `noResume`
-
-```zig
-pub fn noResume() Config
-```
-
-Resume disabled, overwrite enabled.
-
-### `noRetries`
-
-```zig
-pub fn noRetries() Config
-```
-
-All retries disabled.
+- Resume disabled
 
 ## Methods
 
 ### `getUserAgent`
 
 ```zig
-pub fn getUserAgent(self: Config) []const u8
+pub fn getUserAgent(self: *const Config) []const u8
 ```
 
 Returns the effective User-Agent string.
 
-### `validate`
-
-```zig
-pub fn validate(self: Config) !void
-```
-
-Validate configuration values.
-
-**Errors:**
-
-- `InvalidBufferSize` - Buffer size is 0
-- `BufferSizeTooLarge` - Buffer exceeds 16 MB
-
 ## Field Reference
+
+### Update Check Settings
+
+| Field                 | Type   | Default | Description                             |
+| --------------------- | ------ | ------- | --------------------------------------- |
+| `enable_update_check` | `bool` | true    | Automatically check for library updates |
 
 ### Retry Settings
 
@@ -121,50 +138,7 @@ Validate configuration values.
 | `max_retry_delay_ms`  | `u64`  | 30000   | Maximum delay cap       |
 | `exponential_backoff` | `bool` | true    | Use exponential backoff |
 
-### Connection Settings
-
-| Field                | Type  | Default | Description        |
-| -------------------- | ----- | ------- | ------------------ |
-| `connect_timeout_ms` | `u64` | 30000   | Connection timeout |
-| `read_timeout_ms`    | `u64` | 60000   | Read timeout       |
-| `max_redirects`      | `u16` | 10      | Redirect limit     |
-
-### File Handling
-
-| Field                | Type               | Default               | Description            |
-| -------------------- | ------------------ | --------------------- | ---------------------- |
-| `resume_downloads`   | `bool`             | true                  | Enable resume          |
-| `file_exists_action` | `FileExistsAction` | `.rename_with_number` | Existing file handling |
-
-### Performance
-
-| Field                  | Type    | Default | Description          |
-| ---------------------- | ------- | ------- | -------------------- |
-| `buffer_size`          | `usize` | 65536   | Download buffer      |
-| `progress_interval_ms` | `u64`   | 100     | Progress update rate |
-
-### Identity
-
-| Field        | Type          | Default | Description       |
-| ------------ | ------------- | ------- | ----------------- |
-| `user_agent` | `?[]const u8` | null    | Custom User-Agent |
-| `verify_tls` | `bool`        | true    | TLS verification  |
-
-## Example
-
-```zig
-var config = downloader.Config.default();
-config.max_retries = 5;
-config.resume_downloads = true;
-config.file_exists_action = .rename_with_number;
-config.buffer_size = 128 * 1024;
-
-try config.validate();
-
-var client = try Client.init(allocator, config);
-```
-
-## See Also
+### See Also
 
 - [Client](/api/client) - Download client
 - [Configuration Guide](/guide/configuration) - Usage guide

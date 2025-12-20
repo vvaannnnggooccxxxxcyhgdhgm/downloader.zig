@@ -22,10 +22,73 @@ pub const UpdateInfo = struct {
     download_url: ?[]const u8,
 };
 
+/// Check for updates from GitHub.
+pub fn checkForUpdates(allocator: std.mem.Allocator) !UpdateInfo {
+    var http_client = std.http.Client{ .allocator = allocator };
+    defer http_client.deinit();
+
+    const uri = try std.Uri.parse("https://api.github.com/repos/muhammad-fiaz/downloader.zig/releases/latest");
+
+    var server_header_buffer: [16 * 1024]u8 = undefined;
+    var req = try http_client.request(.GET, uri, .{
+        .extra_headers = &.{
+            .{ .name = "User-Agent", .value = "downloader.zig-update-checker" },
+            .{ .name = "Accept", .value = "application/vnd.github.v3+json" },
+        },
+    });
+    defer req.deinit();
+
+    try req.sendBodiless();
+    var resp = try req.receiveHead(&server_header_buffer);
+
+    if (resp.head.status != .ok) {
+        return UpdateInfo{
+            .available = false,
+            .current_version = version.version,
+            .latest_version = null,
+            .download_url = null,
+        };
+    }
+
+    var body_buffer: std.ArrayListUnmanaged(u8) = .empty;
+    defer body_buffer.deinit(allocator);
+
+    var reader_ptr = resp.reader(&server_header_buffer);
+    var reader = reader_ptr.adaptToOldInterface();
+
+    const limit = resp.head.content_length;
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const current_len = body_buffer.items.len;
+        const to_read = if (limit) |l| @min(buf.len, l - current_len) else buf.len;
+        if (to_read == 0 and limit != null) break;
+
+        const n = try reader.read(buf[0..to_read]);
+        if (n == 0) break;
+
+        try body_buffer.appendSlice(allocator, buf[0..n]);
+        if (body_buffer.items.len > 1 * 1024 * 1024) return error.StreamTooLong;
+    }
+
+    const parsed = try std.json.parseFromSlice(struct {
+        tag_name: []const u8,
+        html_url: []const u8,
+    }, allocator, body_buffer.items, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+
+    const latest = parseVersionTag(parsed.value.tag_name);
+    const rel = compareVersions(latest);
+
+    return UpdateInfo{
+        .available = rel == .remote_newer,
+        .current_version = version.version,
+        .latest_version = try allocator.dupe(u8, latest),
+        .download_url = try allocator.dupe(u8, parsed.value.html_url),
+    };
+}
+
 /// Check for updates in a background thread.
-///
-/// Returns a thread handle that can be joined, or null if disabled.
-pub fn checkInBackground(allocator: std.mem.Allocator) ?std.Thread {
+pub fn checkInBackground(allocator: std.mem.Allocator) !?std.Thread {
     _ = allocator;
     // Background update checking is optional and disabled by default
     // to avoid unexpected network requests.

@@ -5,103 +5,89 @@
 const std = @import("std");
 const downloader = @import("downloader");
 
-/// Sample PDF file for testing resume capability
-const SAMPLE_URL = "https://filesamples.com/samples/document/pdf/sample3.pdf";
+/// Sample large file for testing resume capability
+const SAMPLE_URL = "https://filesamples.com/samples/video/mp4/sample_640x360.mp4";
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const output = "resume_test.pdf";
+    const output = "resume_test.mp4";
 
-    std.debug.print("\n", .{});
-    std.debug.print("===========================================================\n", .{});
-    std.debug.print("               Resume Capability Demo                       \n", .{});
-    std.debug.print("===========================================================\n", .{});
-    std.debug.print("\n", .{});
+    std.debug.print("\n[*] Resume Capability Demo\n", .{});
 
-    // Step 1: Create a partial file to simulate an interrupted download
-    std.debug.print("[*] Step 1: Simulating interrupted download\n", .{});
+    // Step 1: Start a download and cancel it halfway
+    std.debug.print("[*] Step 1: Starting download (will cancel at 10%)...\n", .{});
     {
-        const file = try std.fs.cwd().createFile(output, .{});
-        defer file.close();
+        var config = downloader.Config.default();
+        config.file_exists_action = .overwrite;
 
-        // Write some placeholder data (simulating partial download)
-        const partial_data = "%PDF-1.4 (partial download simulation)\n";
-        try file.writeAll(partial_data);
+        var client = try downloader.Client.init(allocator, config);
+        defer client.deinit();
 
-        std.debug.print("    Created partial file: {s}\n", .{output});
-        std.debug.print("    Partial size: {d} bytes\n", .{partial_data.len});
+        _ = client.download(SAMPLE_URL, output, cancelAtTenPercent) catch |err| {
+            if (err == error.Cancelled) {
+                std.debug.print("\n[!] Download intentionally cancelled at 10%\n", .{});
+            } else {
+                return err;
+            }
+        };
     }
 
-    // Step 2: Attempt to resume download
-    std.debug.print("\n[*] Step 2: Attempting to resume download\n", .{});
-    std.debug.print("    URL: {s}\n", .{SAMPLE_URL});
-    std.debug.print("\n", .{});
+    // Verify partial file exists
+    if (std.fs.cwd().openFile(output, .{})) |file| {
+        const stat = try file.stat();
+        const size = formatBytes(stat.size);
+        std.debug.print("[*] Partial file size: {d:.2} {s}\n", .{ size.value, size.unit });
+        file.close();
+    } else |_| {}
 
-    // Configuration with resume enabled
-    var config = downloader.Config.default();
-    config.resume_downloads = true;
-    config.file_exists_action = .resume_or_overwrite; // Try resume, if not possible overwrite
+    // Step 2: Resume the download
+    std.debug.print("\n[*] Step 2: Resuming download...\n", .{});
+    {
+        var config = downloader.Config.forLargeFiles();
+        config.resume_downloads = true;
+        config.file_exists_action = .resume_or_overwrite;
 
-    var client = try downloader.Client.init(allocator, config);
-    defer client.deinit();
+        var client = try downloader.Client.init(allocator, config);
+        defer client.deinit();
 
-    const bytes = client.download(SAMPLE_URL, output, progressCallback) catch |err| {
-        std.debug.print("\n[!] Download failed: {s}\n", .{@errorName(err)});
-
-        // If resume failed, try fresh download
-        if (err == error.ResumeNotSupported or err == error.FileModified) {
-            std.debug.print("\n[*] Resume not supported, trying fresh download...\n", .{});
-
-            // Delete partial file
-            std.fs.cwd().deleteFile(output) catch {};
-
-            var fresh_config = downloader.Config.default();
-            fresh_config.resume_downloads = false;
-            fresh_config.file_exists_action = .overwrite;
-
-            var fresh_client = try downloader.Client.init(allocator, fresh_config);
-            defer fresh_client.deinit();
-
-            const fresh_bytes = try fresh_client.download(SAMPLE_URL, output, progressCallback);
-            std.debug.print("\n[+] Fresh download complete: {d} bytes\n", .{fresh_bytes});
-            return;
-        }
-
-        return err;
-    };
-
-    std.debug.print("\n\n[+] Download complete!\n", .{});
-    std.debug.print("    Bytes downloaded this session: {d}\n", .{bytes});
+        const bytes = try client.download(SAMPLE_URL, output, progressCallback);
+        std.debug.print("\n[+] Resumed download complete! Total bytes this session: {d}\n", .{bytes});
+    }
 
     // Verify final file
     if (std.fs.cwd().openFile(output, .{})) |file| {
-        defer file.close();
         const stat = try file.stat();
-        std.debug.print("    Final file size: {d} bytes\n", .{stat.size});
+        const size = formatBytes(stat.size);
+        std.debug.print("[+] Final file size: {d:.2} {s}\n", .{ size.value, size.unit });
+        file.close();
     } else |_| {}
 }
 
-fn progressCallback(p: downloader.Progress) bool {
-    if (p.is_resumed) {
-        std.debug.print("\r    [*] Resuming from byte {d}...", .{p.start_offset});
-    } else {
-        // Draw progress bar
-        const pct = p.percentage() orelse 0;
-        const bar_width: u8 = 30;
-        const filled = @as(usize, @intFromFloat(pct / 100.0 * @as(f64, @floatFromInt(bar_width))));
-
-        std.debug.print("\r    [", .{});
-        for (0..bar_width) |i| {
-            if (i < filled) {
-                std.debug.print("#", .{});
-            } else {
-                std.debug.print("-", .{});
-            }
-        }
-        std.debug.print("] {d:.1}% | {d} bytes", .{ pct, p.totalDownloaded() });
+fn formatBytes(bytes: u64) struct { value: f64, unit: []const u8 } {
+    const units = [_][]const u8{ "B", "KB", "MB", "GB", "TB" };
+    var size: f64 = @floatFromInt(bytes);
+    var unit_idx: usize = 0;
+    while (size >= 1024.0 and unit_idx < units.len - 1) {
+        size /= 1024.0;
+        unit_idx += 1;
     }
+    return .{ .value = size, .unit = units[unit_idx] };
+}
+
+fn cancelAtTenPercent(p: downloader.Progress) bool {
+    const pct = p.percentage() orelse 0;
+    if (pct >= 10.0) return false; // Signal cancel
+
+    std.debug.print("\r    Downloading: {d:.1}%", .{pct});
+    return true;
+}
+
+fn progressCallback(p: downloader.Progress) bool {
+    const pct = p.percentage() orelse 0;
+    const downloaded = formatBytes(p.totalDownloaded());
+    std.debug.print("\r    Resuming: {d:.1}% ({d:.2} {s} downloaded)", .{ pct, downloaded.value, downloaded.unit });
     return true;
 }

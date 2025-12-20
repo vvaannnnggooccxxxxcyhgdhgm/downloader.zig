@@ -10,6 +10,8 @@ Practical examples demonstrating downloader.zig usage.
 | [Advanced](/examples/advanced)     | Full configuration options        |
 | [Concurrent](/examples/concurrent) | Parallel downloads with threads   |
 | [Resume](/examples/resume)         | Resume interrupted downloads      |
+| [Checksum](/examples/checksum)     | File integrity verification       |
+| [Updates](/examples/update-check)  | Check for library updates         |
 
 ## Running Examples
 
@@ -26,6 +28,8 @@ zig build run -- https://example.com/file.zip
 zig build run-advanced
 zig build run-concurrent
 zig build run-resume
+zig build run-checksum
+zig build run-update_check
 
 # All examples
 zig build run-all-examples

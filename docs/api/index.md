@@ -26,6 +26,9 @@ fn downloadWithProgress(allocator, url, output_path, callback) !u64
 
 // Download with full configuration
 fn downloadWithConfig(allocator, url, output_path, config, callback) !u64
+
+// Check for updates
+fn checkForUpdates(allocator) !UpdateInfo
 ```
 
 ### Client Methods

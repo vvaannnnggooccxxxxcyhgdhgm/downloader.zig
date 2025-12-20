@@ -1,6 +1,5 @@
 <div align="center">
 
-
 # downloader.zig
 
 <a href="https://muhammad-fiaz.github.io/downloader.zig/"><img src="https://img.shields.io/badge/docs-muhammad--fiaz.github.io-blue" alt="Documentation"></a>
@@ -321,8 +320,11 @@ zig build run-advanced
 # Concurrent downloads
 zig build run-concurrent
 
-# Resume capability demo
-zig build run-resume
+# Checksum verification
+zig build run-checksum
+
+# Check for updates
+zig build run-update_check
 ```
 
 ---
@@ -394,4 +396,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 - **Releases**: https://github.com/muhammad-fiaz/downloader.zig/releases
 
 ---
-

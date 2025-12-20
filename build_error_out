@@ -1,0 +1,46 @@
+﻿System.Management.Automation.RemoteException
+===========================================================
+              downloader.zig v0.0.1                       
+         Production-Ready HTTP/HTTPS Downloader            
+===========================================================
+System.Management.Automation.RemoteException
+[*] Download Configuration
+    URL: https://filesamples.com/samples/document/pdf/sample3.pdf
+    Output: sample.pdf
+System.Management.Automation.RemoteException
+[*] Starting download...
+System.Management.Automation.RemoteException
+[!] Download failed: NotFound
+error: NotFound
+C:\Users\user\scoop\apps\zig\0.15.1\lib\std\os\windows.zig:126:39: 0x7ff611ea5c0c in OpenFile (example_zcu.obj)
+            .OBJECT_NAME_NOT_FOUND => return error.FileNotFound,
+                                      ^
+C:\Users\user\scoop\apps\zig\0.15.1\lib\std\fs\Dir.zig:945:19: 0x7ff611e8c99d in openFileW (example_zcu.obj)
+        .handle = try w.OpenFile(sub_path_w, .{
+                  ^
+C:\Users\user\scoop\apps\zig\0.15.1\lib\std\fs\Dir.zig:821:9: 0x7ff611e729b6 in openFile (example_zcu.obj)
+        return self.openFileW(path_w.span(), flags);
+        ^
+C:\Users\user\Downloads\downloader.zig\src\client.zig:366:17: 0x7ff611ee6733 in downloadOnce (example_zcu.obj)
+                try std.fs.cwd().openFile(final_output, .{ .mode = .read_write })
+                ^
+C:\Users\user\Downloads\downloader.zig\src\errors.zig:336:5: 0x7ff611eeac7a in toDownloadError (example_zcu.obj)
+    return switch (err) {
+    ^
+C:\Users\user\Downloads\downloader.zig\src\client.zig:117:21: 0x7ff611ee92c4 in download (example_zcu.obj)
+                    return download_err;
+                    ^
+C:\Users\user\Downloads\downloader.zig\examples\basic.zig:47:9: 0x7ff611eeb0c9 in main (example_zcu.obj)
+        return err;
+        ^
+run
++- run exe example failure
+error: the following command exited with error code 1:
+"C:\\Users\\user\\Downloads\\downloader.zig\\zig-out\\bin\\example.exe"
+System.Management.Automation.RemoteException
+Build Summary: 2/4 steps succeeded; 1 failed
+run transitive failure
++- run exe example failure
+System.Management.Automation.RemoteException
+error: the following build command failed with exit code 1:
+.zig-cache\o\ee4c2bba8715cbf0bc821ebfab15dbbd\build.exe C:\Users\user\scoop\apps\zig\0.15.1\zig.exe C:\Users\user\scoop\apps\zig\0.15.1\lib C:\Users\user\Downloads\downloader.zig .zig-cache C:\Users\user\AppData\Local\zig --seed 0x1abfd0da -Z49d5797d1fa7fadf run

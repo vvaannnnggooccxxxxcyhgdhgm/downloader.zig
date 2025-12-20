@@ -1,0 +1,21 @@
+{
+  "name": "downloader-zig-docs",
+  "version": "1.0.0",
+  "description": "Documentation for downloader.zig library",
+  "type": "module",
+  "scripts": {
+    "docs:dev": "vitepress dev",
+    "docs:build": "vitepress build",
+    "docs:preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4",
+    "vue": "^3.5.26"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/muhammad-fiaz/downloader.zig"
+  },
+  "author": "Muhammad Fiaz",
+  "license": "MIT"
+}

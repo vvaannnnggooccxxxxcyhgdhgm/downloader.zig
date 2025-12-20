@@ -51,12 +51,23 @@ jobs:
       - name: Prepare Release Artifacts
         run: |
           mkdir -p release
-          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
-            # Copy windows static lib
-            cp zig-out/lib/downloader.lib release/downloader-${{ matrix.target }}.lib || true
-          else
-            # Copy unix static lib
-            cp zig-out/lib/libdownloader.a release/libdownloader-${{ matrix.target }}.a || true
+          echo "Listing zig-out directory:"
+          ls -la zig-out || true
+          echo "Finding built library files:"
+          find zig-out -type f -name 'libdownloader*' -o -name 'downloader.*' -print || true
+
+          # Copy any matching library files to the release directory
+          FOUND=0
+          for f in $(find zig-out -type f -name 'libdownloader*' -o -name 'downloader.*' -print); do
+            echo "Copying $f -> release/$(basename "$f")-${{ matrix.target }}"
+            cp "$f" "release/$(basename "$f")-${{ matrix.target }}" && FOUND=1 || true
+          done
+
+          # If no artifacts were found, zip the full build output for debugging
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No library artifacts found for target ${{ matrix.target }}. Creating debug zip..."
+            zip -r release/zig-out-${{ matrix.target }}.zip zig-out || true
+            echo "No library artifacts were produced for target ${{ matrix.target }}" > release/NO_ARTIFACTS_${{ matrix.target }}.txt
           fi
 
       - name: Upload artifacts to workflow

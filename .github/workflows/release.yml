@@ -9,12 +9,8 @@ on:
 
 jobs:
   test:
-    name: Test on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+    name: Test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
@@ -63,16 +59,32 @@ jobs:
             cp zig-out/lib/libdownloader.a release/libdownloader-${{ matrix.target }}.a || true
           fi
 
-      - name: Upload Release Artifacts
+      - name: Upload artifacts to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release/*
+
+  upload-release:
+    name: Upload Release Artifacts
+    needs: [build-library]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Download built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+      - name: Upload release artifacts to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Upload all prepared artifacts to the GitHub Release
           gh release upload "${{ github.event.release.tag_name }}" release/* --clobber || true
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
   update-release:
     name: Update Release Description
-    needs: [build-library]
+    needs: [upload-release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

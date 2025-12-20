@@ -102,6 +102,18 @@ pub fn build(b: *std.Build) void {
         run_all_step.dependOn(&run_cmd.step);
     }
 
+    // Install step for library
+    const lib = b.addLibrary(.{
+        .name = "downloader",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/downloader.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(lib);
+
     // Documentation generation
     const install_docs = b.addInstallDirectory(.{
         .source_dir = lib_tests.getEmittedDocs(),

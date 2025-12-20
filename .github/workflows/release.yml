@@ -1,5 +1,4 @@
 name: Release
-
 permissions:
   contents: write
 
@@ -9,8 +8,11 @@ on:
 
 jobs:
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
       - uses: mlugg/setup-zig@v2
@@ -24,7 +26,6 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false
       matrix:
         target:
           - x86_64-windows
@@ -45,113 +46,30 @@ jobs:
         with:
           version: 0.15.0
       
-      - name: Build Library (install artifacts)
-        run: zig build install -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+      - name: Build Library
+        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
 
       - name: Prepare Release Artifacts
         run: |
           mkdir -p release
-          echo "Listing zig-out directory:"
-          ls -la zig-out || true
-          echo "Finding built library files in zig-out (common extensions and names):"
-          find zig-out -type f \( -iname '*.a' -o -iname '*.lib' -o -iname '*.so' -o -iname '*.dylib' -o -iname '*.dll' -o -iname 'lib*' -o -iname '*logly*' -o -iname '*downloader*' \) -print || true
-
-          # Copy any matching library files to the release directory
-          FOUND=0
-          for f in $(find zig-out -type f \( -iname '*.a' -o -iname '*.lib' -o -iname '*.so' -o -iname '*.dylib' -o -iname '*.dll' -o -iname 'lib*' -o -iname '*logly*' -o -iname '*downloader*' \) -print); do
-            echo "Copying $f -> release/$(basename \"$f\")-${{ matrix.target }}"
-            cp "$f" "release/$(basename \"$f\")-${{ matrix.target }}" && FOUND=1 || true
-          done
-
-          # If no artifacts were found, zip the full build output for debugging
-          if [ "$FOUND" -eq 0 ]; then
-            echo "No library artifacts found for target ${{ matrix.target }}. Creating debug zip..."
-            zip -r release/zig-out-${{ matrix.target }}.zip zig-out || true
-            echo "No library artifacts were produced for target ${{ matrix.target }}" > release/NO_ARTIFACTS_${{ matrix.target }}.txt
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            # Copy windows static lib
+            cp zig-out/lib/downloader.lib release/downloader-${{ matrix.target }}.lib || true
+          else
+            # Copy unix static lib
+            cp zig-out/lib/libdownloader.a release/libdownloader-${{ matrix.target }}.a || true
           fi
 
-      - name: Show release directory before uploading artifact
-        run: ls -la release || true
-
-      - name: Upload artifacts to workflow
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.target }}
-          path: release
-
-  upload-release:
-    name: Upload Release Artifacts
-    needs: [build-library]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Download built artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release
-
-      - name: Show downloaded release directory tree
+      - name: Upload Release Artifacts
         run: |
-          echo "Top-level release/ contents:"
-          ls -la release || true
-          echo "All files under release/:"
-          find release -type f -print || true
-
-      - name: Flatten release artifacts for upload (libs and binaries)
-        run: |
-          mkdir -p release_flat
-          FOUND=0
-
-          # Find and copy library and binary artifacts. Include:
-          # - static libs: .a, .lib
-          # - shared libs: .so, .dylib, .dll
-          # - files named lib* or containing downloader (libdownloader*, *downloader*)
-          # - any executable file (for binaries without extensions)
-          find release -type f \( -iname '*.a' -o -iname '*.lib' -o -iname '*.so' -o -iname '*.dylib' -o -iname '*.dll' -o -iname 'lib*' -o -iname '*downloader*' -o -executable \) -print0 | while IFS= read -r -d '' f; do
-            artifact_dir=$(dirname "$f" | xargs -I {} basename {})
-            filename=$(basename "$f")
-            dest="release_flat/${artifact_dir}-${filename}"
-            echo "Copying $f -> $dest"
-            cp "$f" "$dest" && FOUND=1 || true
-          done
-
-          # Also include any top-level files matching common binary/library extensions (in case artifacts leaked to top-level)
-          for f in release/*; do
-            if [ -f "$f" ]; then
-              case "$(basename "$f")" in
-                *.a|*.lib|*.so|*.dylib|*.dll|lib*|*downloader*)
-                  echo "Copying top-level $f -> release_flat/$(basename \"$f\")"
-                  cp "$f" "release_flat/$(basename "$f")" && FOUND=1 || true
-                  ;;
-                *)
-                  echo "Skipping non-library top-level file: $f"
-                  ;;
-              esac
-            fi
-          done
-
-          if [ "$FOUND" -eq 0 ]; then
-            echo "No library/binary artifacts found to upload in release/"
-            ls -la release || true
-            echo "Contents of release_flat:" && ls -la release_flat || true
-          fi
-
-      - name: Show flattened release files
-        run: ls -la release_flat || true
-
-      - name: Upload release artifacts to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.event.release.tag_name }}
-          files: release_flat/**
+          # Upload all prepared artifacts to the GitHub Release
+          gh release upload "${{ github.event.release.tag_name }}" release/* --clobber || true
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
   update-release:
     name: Update Release Description
-    needs: [upload-release]
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -167,7 +85,7 @@ jobs:
       - name: Calculate Hash
         id: calc_hash
         run: |
-          zig fetch --save ${{ steps.get_url.outputs.url }} || true
+          zig fetch --save ${{ steps.get_url.outputs.url }}
           # Extract hash from build.zig.zon (it's updated by zig fetch)
           HASH=$(grep '.hash =' build.zig.zon | cut -d '"' -f 2)
           echo "hash=$HASH" >> $GITHUB_OUTPUT
@@ -178,7 +96,7 @@ jobs:
           body: |
             ${{ github.event.release.body }}
 
-            ## 🚀 Installation
+            ## 📦 Installation
 
             ### Option A — Automatic (Recommended)
 
@@ -202,7 +120,7 @@ jobs:
             ### Option B — Manual
 
             ```bash
-            zig fetch --hash https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.event.release.tag_name }}.tar.gz
+            zig fetch https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.event.release.tag_name }}.tar.gz
             ```
 
             Copy that hash into:
@@ -215,18 +133,18 @@ jobs:
 
             | Platform | Architecture | File |
             |----------|--------------|------|
-            | Windows | x86_64 (64-bit) | [downloader-x86_64-windows.lib](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/downloader-x86_64-windows.lib) |
-            | Windows | x86 (32-bit) | [downloader-x86-windows.lib](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/downloader-x86-windows.lib) |
-            | Linux | x86_64 (64-bit) | [libdownloader-x86_64-linux.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86_64-linux.a) |
-            | Linux | x86 (32-bit) | [libdownloader-x86-linux.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86-linux.a) |
+            | Windows | x86_64 | [downloader-x86_64-windows.lib](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/downloader-x86_64-windows.lib) |
+            | Windows | x86 | [downloader-x86-windows.lib](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/downloader-x86-windows.lib) |
+            | Linux | x86_64 | [libdownloader-x86_64-linux.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86_64-linux.a) |
+            | Linux | x86 | [libdownloader-x86-linux.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86-linux.a) |
             | Linux | aarch64 (ARM64) | [libdownloader-aarch64-linux.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-aarch64-linux.a) |
-            | macOS | x86_64 (Intel 64-bit) | [libdownloader-x86_64-macos.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86_64-macos.a) |
+            | macOS | x86_64 (Intel) | [libdownloader-x86_64-macos.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86_64-macos.a) |
             | macOS | aarch64 (Apple Silicon) | [libdownloader-aarch64-macos.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-aarch64-macos.a) |
             | Bare Metal | x86_64 | [libdownloader-x86_64-freestanding.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86_64-freestanding.a) |
-            | Bare Metal | x86 (32-bit) | [libdownloader-x86-freestanding.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86-freestanding.a) |
+            | Bare Metal | x86 | [libdownloader-x86-freestanding.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-x86-freestanding.a) |
             | Bare Metal | aarch64 | [libdownloader-aarch64-freestanding.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-aarch64-freestanding.a) |
             | Bare Metal | RISC-V 64 | [libdownloader-riscv64-freestanding.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-riscv64-freestanding.a) |
-            | Bare Metal | ARM (32-bit) | [libdownloader-arm-freestanding.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-arm-freestanding.a) |
+            | Bare Metal | ARM | [libdownloader-arm-freestanding.a](https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/libdownloader-arm-freestanding.a) |
 
             ### 🛠️ Using Prebuilt Libraries
 
@@ -239,11 +157,3 @@ jobs:
             exe.addLibraryPath(b.path("libs"));
             exe.linkSystemLibrary("downloader");
             ```
-
-            ## 📚 Documentation
-
-            Full documentation is available at: https://muhammad-fiaz.github.io/downloader.zig/
-
-            ## 💖 Support
-
-            If you find this library useful, please consider [sponsoring](https://github.com/sponsors/muhammad-fiaz)!

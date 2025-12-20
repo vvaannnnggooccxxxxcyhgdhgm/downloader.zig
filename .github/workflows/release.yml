@@ -70,11 +70,15 @@ jobs:
             echo "No library artifacts were produced for target ${{ matrix.target }}" > release/NO_ARTIFACTS_${{ matrix.target }}.txt
           fi
 
+      - name: Show release directory before uploading artifact
+        run: ls -la release || true
+
       - name: Upload artifacts to workflow
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.target }}
-          path: release/*
+          path: release
 
   upload-release:
     name: Upload Release Artifacts
@@ -86,14 +90,46 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release
-      - name: Show release directory
-        run: ls -la release || true
+
+      - name: Show downloaded release directory tree
+        run: |
+          echo "Top-level release/ contents:"
+          ls -la release || true
+          echo "All files under release/:"
+          find release -type f -print || true
+
+      - name: Flatten release artifacts for upload
+        run: |
+          mkdir -p release_flat
+          FOUND=0
+          for f in $(find release -type f -print); do
+            # create a unique filename using the artifact directory and original filename
+            artifact_dir=$(dirname "$f" | xargs -I {} basename {})
+            filename=$(basename "$f")
+            dest="release_flat/${artifact_dir}-${filename}"
+            echo "Copying $f -> $dest"
+            cp "$f" "$dest" && FOUND=1 || true
+          done
+          # Also copy any files that were directly in release/
+          for f in release/*; do
+            if [ -f "$f" ]; then
+              echo "Copying top-level $f -> release_flat/$(basename "$f")"
+              cp "$f" "release_flat/$(basename "$f")" && FOUND=1 || true
+            fi
+          done
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No files found to upload in release/"
+            ls -la release || true
+          fi
+
+      - name: Show flattened release files
+        run: ls -la release_flat || true
 
       - name: Upload release artifacts to GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.release.tag_name }}
-          files: release/*
+          files: release_flat/**
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}

@@ -98,28 +98,43 @@ jobs:
           echo "All files under release/:"
           find release -type f -print || true
 
-      - name: Flatten release artifacts for upload
+      - name: Flatten release artifacts for upload (libs and binaries)
         run: |
           mkdir -p release_flat
           FOUND=0
-          for f in $(find release -type f -print); do
-            # create a unique filename using the artifact directory and original filename
+
+          # Find and copy library and binary artifacts. Include:
+          # - static libs: .a, .lib
+          # - shared libs: .so, .dylib, .dll
+          # - files named lib* or containing downloader (libdownloader*, *downloader*)
+          # - any executable file (for binaries without extensions)
+          find release -type f \( -iname '*.a' -o -iname '*.lib' -o -iname '*.so' -o -iname '*.dylib' -o -iname '*.dll' -o -iname 'lib*' -o -iname '*downloader*' -o -executable \) -print0 | while IFS= read -r -d '' f; do
             artifact_dir=$(dirname "$f" | xargs -I {} basename {})
             filename=$(basename "$f")
             dest="release_flat/${artifact_dir}-${filename}"
             echo "Copying $f -> $dest"
             cp "$f" "$dest" && FOUND=1 || true
           done
-          # Also copy any files that were directly in release/
+
+          # Also include any top-level files matching common binary/library extensions (in case artifacts leaked to top-level)
           for f in release/*; do
             if [ -f "$f" ]; then
-              echo "Copying top-level $f -> release_flat/$(basename "$f")"
-              cp "$f" "release_flat/$(basename "$f")" && FOUND=1 || true
+              case "$(basename "$f")" in
+                *.a|*.lib|*.so|*.dylib|*.dll|lib*|*downloader*)
+                  echo "Copying top-level $f -> release_flat/$(basename \"$f\")"
+                  cp "$f" "release_flat/$(basename "$f")" && FOUND=1 || true
+                  ;;
+                *)
+                  echo "Skipping non-library top-level file: $f"
+                  ;;
+              esac
             fi
           done
+
           if [ "$FOUND" -eq 0 ]; then
-            echo "No files found to upload in release/"
+            echo "No library/binary artifacts found to upload in release/"
             ls -la release || true
+            echo "Contents of release_flat:" && ls -la release_flat || true
           fi
 
       - name: Show flattened release files

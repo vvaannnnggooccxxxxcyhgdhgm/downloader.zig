@@ -1,0 +1,39 @@
+# Zig build artifacts
+zig-out/
+.zig-cache/
+zig-cache/
+
+# Downloaded test files
+*.pdf
+*.zip
+*.iso
+*.exe
+*.tar.gz
+*.tar.bz2
+
+# Build output
+build_output.txt
+benchmark-results.md
+
+# VitePress
+docs/.vitepress/dist/
+docs/.vitepress/cache/
+docs/node_modules/
+docs/package-lock.json
+docs/bun.lockb
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local

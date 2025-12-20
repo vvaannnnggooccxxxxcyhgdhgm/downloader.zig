@@ -45,8 +45,8 @@ jobs:
         with:
           version: 0.15.0
       
-      - name: Build Library
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+      - name: Build Library (install artifacts)
+        run: zig build install -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
 
       - name: Prepare Release Artifacts
         run: |
@@ -86,12 +86,17 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release
+      - name: Show release directory
+        run: ls -la release || true
+
       - name: Upload release artifacts to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: release/*
         env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          # Upload all prepared artifacts to the GitHub Release
-          gh release upload "${{ github.event.release.tag_name }}" release/* --clobber || true
 
   update-release:
     name: Update Release Description

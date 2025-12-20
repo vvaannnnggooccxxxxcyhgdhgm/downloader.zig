@@ -72,7 +72,7 @@ jobs:
 
   update-release:
     name: Update Release Description
-    needs: [test]
+    needs: [build-library]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

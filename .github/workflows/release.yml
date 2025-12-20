@@ -53,14 +53,14 @@ jobs:
           mkdir -p release
           echo "Listing zig-out directory:"
           ls -la zig-out || true
-          echo "Finding built library files:"
-          find zig-out -type f -name 'libdownloader*' -o -name 'downloader.*' -print || true
+          echo "Finding built library files in zig-out (common extensions and names):"
+          find zig-out -type f \( -iname '*.a' -o -iname '*.lib' -o -iname '*.so' -o -iname '*.dylib' -o -iname '*.dll' -o -iname 'lib*' -o -iname '*logly*' -o -iname '*downloader*' \) -print || true
 
           # Copy any matching library files to the release directory
           FOUND=0
-          for f in $(find zig-out -type f -name 'libdownloader*' -o -name 'downloader.*' -print); do
-            echo "Copying $f -> release/$(basename "$f")-${{ matrix.target }}"
-            cp "$f" "release/$(basename "$f")-${{ matrix.target }}" && FOUND=1 || true
+          for f in $(find zig-out -type f \( -iname '*.a' -o -iname '*.lib' -o -iname '*.so' -o -iname '*.dylib' -o -iname '*.dll' -o -iname 'lib*' -o -iname '*logly*' -o -iname '*downloader*' \) -print); do
+            echo "Copying $f -> release/$(basename \"$f\")-${{ matrix.target }}"
+            cp "$f" "release/$(basename \"$f\")-${{ matrix.target }}" && FOUND=1 || true
           done
 
           # If no artifacts were found, zip the full build output for debugging

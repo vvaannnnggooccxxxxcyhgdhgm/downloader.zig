@@ -96,7 +96,7 @@ Downloader.zig supports a wide range of platforms and architectures:
 The easiest way to add downloader.zig to your project:
 
 ```bash
-zig fetch --save https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/v0.0.1.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/0.0.1.tar.gz
 ```
 
 This automatically adds the dependency with the correct hash to your `build.zig.zon`.
@@ -108,7 +108,7 @@ Add to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .downloader = .{
-        .url = "https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/v0.0.1.tar.gz",
+        .url = "https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/0.0.1.tar.gz",
         .hash = "...", // Run zig fetch to get the correct hash
     },
 },

@@ -10,7 +10,7 @@ Multiple methods for adding downloader.zig to your project.
 ## Method 1: zig fetch (Recommended)
 
 ```bash
-zig fetch --save https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/v0.0.1.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/0.0.1.tar.gz
 ```
 
 This command:
@@ -29,7 +29,7 @@ This command:
     .version = "0.0.1",
     .dependencies = .{
         .downloader = .{
-            .url = "https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/v0.0.1.tar.gz",
+            .url = "https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/0.0.1.tar.gz",
             .hash = "...",
         },
     },
@@ -40,7 +40,7 @@ This command:
 ### Step 2: Get the Hash
 
 ```bash
-zig fetch --hash https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/v0.0.1.tar.gz
+zig fetch --hash https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/0.0.1.tar.gz
 ```
 
 ### Step 3: Update build.zig

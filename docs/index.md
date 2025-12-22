@@ -54,7 +54,7 @@ features:
 Add to your `build.zig.zon`:
 
 ```bash
-zig fetch --save https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/v0.0.1.tar.gz
+zig fetch --save https://github.com/muhammad-fiaz/downloader.zig/archive/refs/tags/0.0.1.tar.gz
 ```
 
 Then use in your code:
